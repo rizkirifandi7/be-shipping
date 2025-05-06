@@ -22,8 +22,9 @@ module.exports = (sequelize, DataTypes) => {
 			tinggi: DataTypes.DECIMAL,
 			lebar: DataTypes.DECIMAL,
 			panjang: DataTypes.DECIMAL,
-			kapasitas_berat: DataTypes.INTEGER,
-			kapasitas_volume: DataTypes.INTEGER,
+			kapasitas_berat: DataTypes.DECIMAL,
+			kapasitas_volume: DataTypes.DECIMAL,
+			status: DataTypes.ENUM("active", "inactive"),
 		},
 		{
 			sequelize,

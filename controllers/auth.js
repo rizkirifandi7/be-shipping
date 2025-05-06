@@ -39,6 +39,7 @@ const Register = async (req, res) => {
 			password: hashedPassword,
 			role,
 			telepon,
+			status: "active",
 		});
 
 		res.status(201).json({
@@ -53,8 +54,6 @@ const Register = async (req, res) => {
 		});
 	}
 };
-
-
 
 const Login = async (req, res) => {
 	try {
@@ -89,8 +88,7 @@ const Login = async (req, res) => {
 		res.status(200).json({
 			status: true,
 			message: "Login berhasil",
-			data: { token },
-			role: user.role,
+			data: { token, role: user.role },
 		});
 	} catch (error) {
 		res.status(500).json({

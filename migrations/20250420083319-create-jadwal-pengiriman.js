@@ -9,6 +9,9 @@ module.exports = {
 				primaryKey: true,
 				type: Sequelize.INTEGER,
 			},
+			id_dokumen_pengiriman: {
+				type: Sequelize.INTEGER,
+			},
 			id_order: {
 				type: Sequelize.INTEGER,
 			},

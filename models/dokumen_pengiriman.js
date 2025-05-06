@@ -9,15 +9,16 @@ module.exports = (sequelize, DataTypes) => {
 		 */
 		static associate(models) {
 			// define association here
-			Dokumen_Pengiriman.belongsTo(models.Jadwal_Pengiriman, {
-				foreignKey: "id_jadwal_pengiriman",
+			Dokumen_Pengiriman.hasMany(models.Jadwal_Pengiriman, {
+				foreignKey: "id_dokumen_pengiriman",
 				as: "jadwal_pengiriman",
 			});
 		}
 	}
 	Dokumen_Pengiriman.init(
 		{
-			id_jadwal_pengiriman: DataTypes.INTEGER,
+			nama_dokumen: DataTypes.STRING,
+			nomor_dokumen: DataTypes.STRING,
 			file_path: DataTypes.STRING,
 			catatan: DataTypes.TEXT,
 		},
@@ -28,3 +29,4 @@ module.exports = (sequelize, DataTypes) => {
 	);
 	return Dokumen_Pengiriman;
 };
+

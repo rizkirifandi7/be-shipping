@@ -23,7 +23,7 @@ module.exports = {
 					total_harga: 85000,
 					diskon: 5000,
 					pajak: 5000,
-          status: "scheduled",
+          status: "pending",
           tanggal_order: new Date(),
 					createdAt: new Date(),
 					updatedAt: new Date(),

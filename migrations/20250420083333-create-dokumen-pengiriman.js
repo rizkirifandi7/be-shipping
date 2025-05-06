@@ -9,8 +9,11 @@ module.exports = {
 				primaryKey: true,
 				type: Sequelize.INTEGER,
 			},
-			id_jadwal_pengiriman: {
-				type: Sequelize.INTEGER,
+			nama_dokumen: {
+				type: Sequelize.STRING,
+			},
+			nomor_dokumen: {
+				type: Sequelize.STRING,
 			},
 			file_path: {
 				type: Sequelize.STRING,

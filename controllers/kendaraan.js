@@ -33,20 +33,21 @@ const createKendaraan = async (req, res) => {
 		const {
 			nama,
 			plat_nomor,
-			kapasitas_volume,
 			kapasitas_berat,
 			tinggi,
 			lebar,
 			panjang,
+			status,
 		} = req.body;
 		const kendaraan = await Kendaraan.create({
 			nama,
 			plat_nomor,
-			kapasitas_volume,
+			kapasitas_volume: panjang * lebar * tinggi,
 			kapasitas_berat,
 			tinggi,
 			lebar,
 			panjang,
+			status: status || "active",
 		});
 		res.status(201).json({
 			message: "Kendaraan created successfully",
@@ -63,11 +64,11 @@ const updateKendaraan = async (req, res) => {
 		const {
 			nama,
 			plat_nomor,
-			kapasitas_volume,
 			kapasitas_berat,
 			tinggi,
 			lebar,
 			panjang,
+			status,
 		} = req.body;
 		const kendaraan = await Kendaraan.findByPk(id);
 		if (!kendaraan) {
@@ -75,11 +76,12 @@ const updateKendaraan = async (req, res) => {
 		}
 		kendaraan.nama = nama;
 		kendaraan.plat_nomor = plat_nomor;
-		kendaraan.kapasitas_volume = kapasitas_volume;
+		kendaraan.kapasitas_volume = panjang * lebar * tinggi;
 		kendaraan.kapasitas_berat = kapasitas_berat;
 		kendaraan.tinggi = tinggi;
 		kendaraan.lebar = lebar;
 		kendaraan.panjang = panjang;
+		kendaraan.status = status;
 
 		await kendaraan.save();
 		res.status(200).json({

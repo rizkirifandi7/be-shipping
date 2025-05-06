@@ -25,10 +25,13 @@ module.exports = {
 				type: Sequelize.DECIMAL,
 			},
 			kapasitas_volume: {
-				type: Sequelize.INTEGER,
+				type: Sequelize.DECIMAL,
 			},
 			kapasitas_berat: {
-				type: Sequelize.INTEGER,
+				type: Sequelize.DECIMAL,
+			},
+			status: {
+				type: Sequelize.ENUM("active", "inactive"),
 			},
 			createdAt: {
 				allowNull: false,

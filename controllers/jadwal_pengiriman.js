@@ -6,7 +6,10 @@ const {
 	Customer,
 	Order_Detail,
 	Produk,
+	Dokumen_Pengiriman,
 } = require("../models");
+
+const { sequelize } = require("../models");
 
 const getAllJadwalPengiriman = async (req, res) => {
 	try {
@@ -21,11 +24,14 @@ const getAllJadwalPengiriman = async (req, res) => {
 					as: "driver",
 					attributes: ["id", "nama", "email", "telepon"],
 				},
+				{
+					model: Dokumen_Pengiriman,
+					as: "dokumen_pengiriman",
+					attributes: ["id", "nama_dokumen", "nomor_dokumen"],
+				},
 			],
 		});
 
-		// Ambil semua order untuk setiap jadwal
-		// ...existing code...
 		const jadwalWithOrders = await Promise.all(
 			jadwalPengiriman.map(async (jadwal) => {
 				let orders = [];
@@ -36,7 +42,6 @@ const getAllJadwalPengiriman = async (req, res) => {
 							{
 								model: Customer,
 								as: "customer",
-								attributes: ["id", "nama", "email", "telepon"],
 							},
 							{
 								model: Order_Detail,
@@ -100,7 +105,6 @@ const getJadwalPengirimanById = async (req, res) => {
 					{
 						model: Customer,
 						as: "customer",
-						attributes: ["id", "nama", "email", "telepon"],
 					},
 					{
 						model: Order_Detail,
@@ -156,6 +160,7 @@ const createJadwalPengiriman = async (req, res) => {
 };
 
 const updateJadwalPengiriman = async (req, res) => {
+	const transaction = await sequelize.transaction();
 	try {
 		const { id } = req.params;
 		const {
@@ -164,19 +169,73 @@ const updateJadwalPengiriman = async (req, res) => {
 			id_driver,
 			tgl_pengiriman,
 			perkiraan_sampai,
+			status,
 			catatan,
 		} = req.body;
-		const jadwalPengiriman = await Jadwal_Pengiriman.findByPk(id);
+		const jadwalPengiriman = await Jadwal_Pengiriman.findByPk(id, {
+			transaction,
+		});
 		if (!jadwalPengiriman) {
+			await transaction.rollback();
 			return res.status(404).json({ message: "Jadwal Pengiriman not found" });
 		}
-		jadwalPengiriman.id_order = id_order;
-		jadwalPengiriman.id_kendaraan = id_kendaraan;
-		jadwalPengiriman.id_driver = id_driver;
-		jadwalPengiriman.tgl_pengiriman = tgl_pengiriman;
-		jadwalPengiriman.perkiraan_sampai = perkiraan_sampai;
-		jadwalPengiriman.catatan = catatan;
-		await jadwalPengiriman.save();
+
+		// Update jadwal
+		await jadwalPengiriman.update(
+			{
+				status: status,
+				id_order: id_order,
+				id_kendaraan: id_kendaraan,
+				id_driver: id_driver,
+				tgl_pengiriman: tgl_pengiriman,
+				perkiraan_sampai: perkiraan_sampai,
+				catatan: catatan,
+			},
+			{ transaction }
+		);
+		// Update status semua order yang terkait dengan jadwal ini
+		if (status === "in_transit" || status === "completed") {
+			const orderIds = jadwalPengiriman.order_ids || [];
+			if (orderIds.length > 0) {
+				await Order.update(
+					{ status: status === "in_transit" ? "shipped" : "delivered" },
+					{ where: { id: orderIds }, transaction }
+				);
+			}
+		}
+
+		// Debugging - log nilai sebelum update
+		console.log("Before update - Status:", status);
+		console.log("Kendaraan ID:", jadwalPengiriman.id_kendaraan);
+		console.log("Driver ID:", jadwalPengiriman.id_driver);
+
+		if (status === "completed") {
+			if (jadwalPengiriman.id_kendaraan) {
+				const [kendaraanUpdated] = await Kendaraan.update(
+					{ status: "active" },
+					{
+						where: { id: jadwalPengiriman.id_kendaraan },
+						transaction,
+						individualHooks: true, // Lewati validasi/hook jika perlu
+					}
+				);
+				console.log("Kendaraan update result:", kendaraanUpdated);
+			}
+
+			if (jadwalPengiriman.id_driver) {
+				const [driverUpdated] = await User.update(
+					{ status: "active" },
+					{
+						where: { id: jadwalPengiriman.id_driver },
+						transaction,
+						individualHooks: true,
+					}
+				);
+				console.log("Driver update result:", driverUpdated);
+			}
+		}
+
+		await transaction.commit(); // Commit transaction
 		res.status(200).json({
 			message: "Jadwal Pengiriman updated successfully",
 			data: jadwalPengiriman,
@@ -194,7 +253,7 @@ const deleteJadwalPengiriman = async (req, res) => {
 			return res.status(404).json({ message: "Jadwal Pengiriman not found" });
 		}
 		await jadwalPengiriman.destroy();
-		res.status(200).json({
+		res.status(200).json({	
 			message: "Jadwal Pengiriman deleted successfully",
 		});
 	} catch (error) {

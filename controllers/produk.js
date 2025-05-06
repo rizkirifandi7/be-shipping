@@ -36,7 +36,6 @@ const createProduk = async (req, res) => {
 			deskripsi,
 			kategori,
 			harga,
-			stok,
 			tinggi,
 			lebar,
 			berat,
@@ -50,9 +49,9 @@ const createProduk = async (req, res) => {
 			deskripsi,
 			kategori,
 			harga,
-			stok,
 			tinggi,
 			lebar,
+			berat,
 			panjang,
 			status,
 			stackable,
@@ -75,7 +74,6 @@ const updateProduk = async (req, res) => {
 			deskripsi,
 			kategori,
 			harga,
-			stok,
 			tinggi,
 			lebar,
 			berat,
@@ -92,7 +90,6 @@ const updateProduk = async (req, res) => {
 		produk.deskripsi = deskripsi;
 		produk.kategori = kategori;
 		produk.harga = harga;
-		produk.stok = stok;
 		produk.tinggi = tinggi;
 		produk.lebar = lebar;
 		produk.panjang = panjang;

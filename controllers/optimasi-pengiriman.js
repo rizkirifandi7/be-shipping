@@ -6,6 +6,7 @@ const {
 	Customer,
 	Order_Detail,
 	Produk,
+	Dokumen_Pengiriman,
 } = require("../models");
 
 const { Op } = require("sequelize");
@@ -13,8 +14,14 @@ const solver = require("javascript-lp-solver"); // Library untuk MILP
 
 const createJadwalPengirimanDenganOptimasi = async (req, res) => {
 	try {
-		const { id_driver, tgl_pengiriman, perkiraan_sampai, catatan, id_orders } =
-			req.body;
+		const {
+			id_driver,
+			tgl_pengiriman,
+			perkiraan_sampai,
+			catatan,
+			id_orders,
+			nomor_dokumen,
+		} = req.body;
 
 		// Validasi input
 		if (
@@ -34,7 +41,7 @@ const createJadwalPengirimanDenganOptimasi = async (req, res) => {
 		// Validasi driver dan load data in parallel
 		const [driver, kendaraanList, orders] = await Promise.all([
 			User.findOne({ where: { id: id_driver, role: "driver" } }),
-			Kendaraan.findAll(),
+			Kendaraan.findAll({ where: { status: "active" } }),
 			Order.findAll({
 				where: {
 					id: id_orders,
@@ -88,11 +95,11 @@ const createJadwalPengirimanDenganOptimasi = async (req, res) => {
 		// --- PENAMBAHAN COST KENDARAAN UNTUK OPTIMASI LEBIH EFISIEN ---
 		const kendaraanCostMap = {};
 		kendaraanList.forEach((k) => {
-			// Cost lebih kecil untuk kendaraan kecil
+			// Cost lebih kecil untuk kendaraan kecil, gap diperbesar
 			if (k.kapasitas_berat <= 1200) kendaraanCostMap[k.id] = 1;
-			else if (k.kapasitas_berat <= 1500) kendaraanCostMap[k.id] = 1.2;
-			else if (k.kapasitas_berat <= 2500) kendaraanCostMap[k.id] = 1.5;
-			else kendaraanCostMap[k.id] = 2; // 3 ton paling mahal
+			else if (k.kapasitas_berat <= 1500) kendaraanCostMap[k.id] = 100;
+			else if (k.kapasitas_berat <= 2500) kendaraanCostMap[k.id] = 1000;
+			else kendaraanCostMap[k.id] = 10000;
 		});
 
 		const constraints = {};
@@ -133,7 +140,6 @@ const createJadwalPengirimanDenganOptimasi = async (req, res) => {
 					[`order_${order.id}`]: 1,
 					[`weight_${kendaraan.id}`]: totalBerat,
 					[`volume_${kendaraan.id}`]: totalVolume,
-					[`assign_to_${kendaraan.id}`]: 1,
 				};
 			}
 		}
@@ -153,9 +159,8 @@ const createJadwalPengirimanDenganOptimasi = async (req, res) => {
 				.map((order) => `x_${order.id}_${kendaraan.id}`)
 				.filter((v) => variables[v]);
 			if (assignVars.length > 0) {
-				constraints[`assign_to_${kendaraan.id}`] = {
-					max: assignVars.length,
-				};
+				// Perbaikan: coupling constraint benar
+				constraints[`assign_to_${kendaraan.id}`] = { max: 0 };
 				assignVars.forEach((v) => {
 					variables[v][`assign_to_${kendaraan.id}`] = 1;
 				});
@@ -279,6 +284,31 @@ const createJadwalPengirimanDenganOptimasi = async (req, res) => {
 
 		const createdSchedules = await Promise.all(createSchedulePromises);
 
+		await Promise.all(
+			createdSchedules.map(async (jadwal) => {
+				const nomorDok = nomor_dokumen
+					? nomor_dokumen
+					: `SJ-${jadwal.id}-${Date.now()}`;
+				const dokumen = await Dokumen_Pengiriman.create({
+					nama_dokumen: `Surat Jalan Pengiriman #${jadwal.id}`,
+					nomor_dokumen: nomorDok,
+					catatan: `Otomatis dibuat untuk jadwal pengiriman #${jadwal.id}`,
+					file_path: "-",
+				});
+				await jadwal.update({ id_dokumen_pengiriman: dokumen.id });
+			})
+		);
+
+		const assignedKendaraanIds = Object.keys(assignments).map((id) =>
+			parseInt(id)
+		);
+		await Kendaraan.update(
+			{ status: "inactive" },
+			{ where: { id: assignedKendaraanIds } }
+		);
+
+		await User.update({ status: "inactive" }, { where: { id: id_driver } });
+
 		// Return result
 		return res.status(201).json({
 			message: `Jadwal Pengiriman berhasil dibuat dengan ${
@@ -340,8 +370,9 @@ async function fallbackAlgorithm(
 		const sortedOrders = [...orderData].sort(
 			(a, b) => b.totalBerat - a.totalBerat
 		);
+		// Urutkan kendaraan dari kecil ke besar agar kendaraan kecil dipilih dulu
 		const sortedKendaraan = [...allKendaraan].sort(
-			(a, b) => b.kapasitas_berat - a.kapasitas_berat
+			(a, b) => a.kapasitas_berat - b.kapasitas_berat
 		);
 
 		const assignments = [];
@@ -392,7 +423,7 @@ async function fallbackAlgorithm(
 		const createdSchedules = [];
 		for (const a of assignments) {
 			const jadwal = await Jadwal_Pengiriman.create({
-				order_ids: a.orders.map((o) => o.id), // <-- array of order IDs
+				order_ids: a.orders.map((o) => o.id),
 				id_kendaraan: a.kendaraan.id,
 				id_driver,
 				tgl_pengiriman,
@@ -402,6 +433,17 @@ async function fallbackAlgorithm(
 				status: "scheduled",
 			});
 			createdSchedules.push(jadwal);
+
+			const nomorDok = req.body?.nomor_dokumen
+				? req.body.nomor_dokumen
+				: `SJ-${jadwal.id}-${Date.now()}`;
+			const dokumen = await Dokumen_Pengiriman.create({
+				nama_dokumen: `Surat Jalan Pengiriman #${jadwal.id}`,
+				nomor_dokumen: nomorDok,
+				catatan: `Otomatis dibuat untuk jadwal pengiriman #${jadwal.id}`,
+				file_path: "-",
+			});
+			await jadwal.update({ id_dokumen_pengiriman: dokumen.id });
 		}
 
 		return res.status(201).json({

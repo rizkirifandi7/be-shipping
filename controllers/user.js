@@ -48,71 +48,74 @@ const createUser = async (req, res) => {
 };
 
 const updateUser = async (req, res) => {
-  try {
-    const { id } = req.params;
-    const { nama, email, password, retypePassword, role, telepon } = req.body;
+	try {
+		const { id } = req.params;
+		const { nama, email, password, retypePassword, role, telepon, status } =
+			req.body;
 
-    // Validasi input dasar
-    if (!nama || !email || !role || !telepon) {
-      return res.status(400).json({
-        message: "Nama, email, role, dan telepon harus diisi",
-        status: false,
-      });
-    }
+		// Validasi input dasar
+		if (!nama || !email || !role || !telepon) {
+			return res.status(400).json({
+				message: "Nama, email, role, dan telepon harus diisi",
+				status: false,
+			});
+		}
 
-    const user = await User.findByPk(id);
+		const user = await User.findByPk(id);
 
-    if (!user) {
-      return res.status(404).json({
-        message: "User tidak ditemukan",
-        status: false,
-      });
-    }
+		if (!user) {
+			return res.status(404).json({
+				message: "User tidak ditemukan",
+				status: false,
+			});
+		}
 
-    // Jika ada password yang diinput (ingin mengubah password)
-    if (password || retypePassword) {
-      if (!password || !retypePassword) {
-        return res.status(400).json({
-          message: "Kedua field password harus diisi jika ingin mengubah password",
-          status: false,
-        });
-      }
+		// Jika ada password yang diinput (ingin mengubah password)
+		if (password || retypePassword) {
+			if (!password || !retypePassword) {
+				return res.status(400).json({
+					message:
+						"Kedua field password harus diisi jika ingin mengubah password",
+					status: false,
+				});
+			}
 
-      if (password !== retypePassword) {
-        return res.status(400).json({
-          message: "Password tidak sama",
-          status: false,
-        });
-      }
+			if (password !== retypePassword) {
+				return res.status(400).json({
+					message: "Password tidak sama",
+					status: false,
+				});
+			}
 
-      // Hash password baru
-      const hashedPassword = bcrypt.hashSync(password, 10);
-      user.password = hashedPassword;
-    }
+			// Hash password baru
+			const hashedPassword = bcrypt.hashSync(password, 10);
+			user.password = hashedPassword;
+		}
 
-    // Update field lainnya
-    user.nama = nama;
-    user.email = email;
-    user.role = role;
-    user.telepon = telepon;
+		// Update field lainnya
+		user.nama = nama;
+		user.email = email;
+		user.role = role;
+		user.telepon = telepon;
+		user.status = status;
 
-    await user.save();
+		await user.save();
 
-    // Jangan kembalikan password dalam response
-    const userResponse = user.toJSON();
-    delete userResponse.password;
+		// Jangan kembalikan password dalam response
+		const userResponse = user.toJSON();
+		delete userResponse.password;
 
-    res.status(200).json({
-      status: true,
-      message: "User berhasil diupdate",
-      data: userResponse,
-    });
-  } catch (error) {
-    res.status(500).json({
-      message: error.message,
-      status: false,
-    });
-  }
+		res.status(200).json({
+			status: true,
+			message: "User berhasil diupdate",
+			data: userResponse,
+		});
+	} catch (error) {
+		res.status(500).json({
+			message: error.message,
+			status: false,
+		});
+	}
 };
 
 const deleteUser = async (req, res) => {

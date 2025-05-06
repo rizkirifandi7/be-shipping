@@ -37,13 +37,14 @@ const getDokumenPengirimanById = async (req, res) => {
 
 const createDokumenPengiriman = async (req, res) => {
 	try {
-		const { id_pengiriman, nama_dokumen } = req.body;
+		const { nama_dokumen, nomor_dokumen } = req.body;
 
-		const file_path = req.file
+		const file_path = req.file;
 
 		const dokumenPengiriman = await Dokumen_Pengiriman.create({
-			id_pengiriman,
 			nama_dokumen,
+			nomor_dokumen,
+			catatan: "-",
 			file_path,
 		});
 		res.status(201).json({
@@ -58,14 +59,17 @@ const createDokumenPengiriman = async (req, res) => {
 const updateDokumenPengiriman = async (req, res) => {
 	try {
 		const { id } = req.params;
-		const { id_pengiriman, nama_dokumen, file_path } = req.body;
+		const { nama_dokumen, nomor_dokumen } = req.body;
 		const dokumenPengiriman = await Dokumen_Pengiriman.findByPk(id);
 		if (!dokumenPengiriman) {
 			return res.status(404).json({ message: "Dokumen Pengiriman not found" });
 		}
-		dokumenPengiriman.id_pengiriman = id_pengiriman;
 		dokumenPengiriman.nama_dokumen = nama_dokumen;
-		dokumenPengiriman.file_path = file_path;
+		dokumenPengiriman.nomor_dokumen = nomor_dokumen;
+		if (req.file) {
+			dokumenPengiriman.file_path = req.file.path; // Assuming you are using multer for file upload
+		}
+
 		await dokumenPengiriman.save();
 		res.status(200).json({
 			message: "Dokumen Pengiriman updated successfully",

@@ -24,9 +24,6 @@ module.exports = {
 			harga: {
 				type: Sequelize.DECIMAL,
 			},
-			stok: {
-				type: Sequelize.INTEGER,
-			},
 			lebar: {
 				type: Sequelize.DECIMAL,
 			},

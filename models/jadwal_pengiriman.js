@@ -23,16 +23,16 @@ module.exports = (sequelize, DataTypes) => {
 				as: "order",
 			});
 
-			Jadwal_Pengiriman.hasMany(models.Dokumen_Pengiriman, {
-				foreignKey: "id_jadwal_pengiriman",
+			Jadwal_Pengiriman.belongsTo(models.Dokumen_Pengiriman, {
+				foreignKey: "id_dokumen_pengiriman",
 				as: "dokumen_pengiriman",
-			});
+			})
 		}
 	}
 	Jadwal_Pengiriman.init(
 		{
+			id_dokumen_pengiriman: DataTypes.INTEGER,
 			id_order: DataTypes.INTEGER,
-			// model Jadwal_Pengiriman
 			order_ids: {
 				type: DataTypes.JSON,
 				allowNull: false,

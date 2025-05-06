@@ -22,7 +22,6 @@ module.exports = (sequelize, DataTypes) => {
 			deskripsi: DataTypes.TEXT,
 			kategori: DataTypes.STRING,
 			harga: DataTypes.DECIMAL,
-			stok: DataTypes.INTEGER,
 			lebar: DataTypes.DECIMAL,
 			panjang: DataTypes.DECIMAL,
 			tinggi: DataTypes.DECIMAL,

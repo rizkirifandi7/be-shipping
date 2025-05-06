@@ -24,6 +24,9 @@ module.exports = {
 			telepon: {
 				type: Sequelize.STRING,
 			},
+			status: {
+				type: Sequelize.ENUM("active", "inactive"),
+			},
 			createdAt: {
 				allowNull: false,
 				type: Sequelize.DATE,
@@ -38,3 +41,4 @@ module.exports = {
 		await queryInterface.dropTable("Users");
 	},
 };
+
