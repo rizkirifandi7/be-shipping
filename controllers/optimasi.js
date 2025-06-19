@@ -9,12 +9,8 @@ const {
 	Dokumen_Pengiriman,
 } = require("../models");
 
-const solver = require("javascript-lp-solver"); // Library untuk MILP
+const solver = require("javascript-lp-solver");
 
-/**
- * Main controller method
- * Creates delivery schedules with optimization and detailed product placement in vehicles
- */
 const createJadwalPengirimanDenganOptimasi = async (req, res) => {
 	try {
 		const {
@@ -26,26 +22,20 @@ const createJadwalPengirimanDenganOptimasi = async (req, res) => {
 			nomor_dokumen,
 		} = req.body;
 
-		// Validate input
 		const validationError = validateInput(
 			id_driver,
 			tgl_pengiriman,
 			perkiraan_sampai,
 			id_orders
 		);
-		if (validationError) {
+		if (validationError)
 			return res.status(400).json({ message: validationError });
-		}
 
-		// Fetch driver, vehicles (active), orders (with details and customer)
 		const [driver, kendaraanList, orders] = await Promise.all([
 			User.findOne({ where: { id: id_driver, role: "driver" } }),
 			Kendaraan.findAll({ where: { status: "active" } }),
 			Order.findAll({
-				where: {
-					id: id_orders,
-					status: "pending",
-				},
+				where: { id: id_orders, status: "pending" },
 				include: [
 					{
 						model: Order_Detail,
@@ -57,25 +47,16 @@ const createJadwalPengirimanDenganOptimasi = async (req, res) => {
 			}),
 		]);
 
-		if (!driver) {
+		if (!driver || !orders.length || !kendaraanList.length) {
 			return res
 				.status(400)
-				.json({ message: "Driver tidak valid atau tidak ditemukan." });
+				.json({
+					message: "Driver tidak valid atau tidak ada order/kendaraan.",
+				});
 		}
 
-		if (!orders.length || !kendaraanList.length) {
-			return res
-				.status(400)
-				.json({ message: "Tidak ada order pending atau kendaraan tersedia" });
-		}
-
-		// Calculate order requirements (weight and volume)
 		const orderRequirements = calculateOrderRequirements(orders);
-
-		// Add vehicle cost map for optimization heuristic
 		const kendaraanCostMap = calculateKendaraanCosts(kendaraanList);
-
-		// Setup and solve MILP model to assign orders to vehicles (order-level optimization)
 		const { constraints, variables, objective } = setupOptimizationModel(
 			orders,
 			kendaraanList,
@@ -90,7 +71,6 @@ const createJadwalPengirimanDenganOptimasi = async (req, res) => {
 			variables,
 			binaries: Object.keys(variables),
 		};
-
 		const result = solver.Solve(model);
 
 		if (!result.feasible) {
@@ -109,55 +89,16 @@ const createJadwalPengirimanDenganOptimasi = async (req, res) => {
 			);
 		}
 
-		// Process optimization results - get order to vehicle assignments
 		const assignmentsByKendaraanId = processOptimizationResults(
 			result,
 			orders,
 			orderRequirements,
 			kendaraanList
 		);
+		const detailedVehiclePlacements = await createVehiclePlacements(
+			assignmentsByKendaraanId
+		);
 
-		// Now, for detailed product-level placement, aggregate all assigned orders per vehicle,
-		// then assign their products spatially inside that vehicle.
-
-		// Prepare response data structure including product placements
-		const detailedVehiclePlacements = [];
-
-		for (const kendaraanIdStr of Object.keys(assignmentsByKendaraanId)) {
-			const kendaraanId = parseInt(kendaraanIdStr);
-			const assignment = assignmentsByKendaraanId[kendaraanIdStr];
-			const kendaraan = assignment.kendaraan;
-
-			// Gather all orders' details assigned to this vehicle
-			const assignedOrders = assignment.orders;
-
-			// Break down assigned orders into product batches
-			const productBatches = createProductBatchesFromOrders(assignedOrders);
-
-			// Apply heuristic 3D placement inside this vehicle for these product batches
-			const placementResult = placeProductsInVehicle(kendaraan, productBatches);
-
-			// For simplicity, assume all assigned products fit; if not, fallback would handle
-			detailedVehiclePlacements.push({
-				kendaraanId,
-				kendaraan: {
-					id: kendaraan.id,
-					nama: kendaraan.nama,
-					plat_nomor: kendaraan.plat_nomor,
-					kapasitas_berat: kendaraan.kapasitas_berat,
-					kapasitas_volume: kendaraan.kapasitas_volume,
-					panjang: kendaraan.panjang,
-					lebar: kendaraan.lebar,
-					tinggi: kendaraan.tinggi,
-				},
-				totalBeratAssigned: assignment.totalBerat,
-				totalVolumeAssigned: assignment.totalVolume,
-				productPlacements: placementResult.placements,
-				remainingWeightCapacity: placementResult.remainingWeightCapacity,
-			});
-		}
-
-		// Update all assigned orders' status in batch
 		const allAssignedOrderIds = Object.values(assignmentsByKendaraanId).flatMap(
 			(a) => a.orders.map((o) => o.id)
 		);
@@ -166,60 +107,21 @@ const createJadwalPengirimanDenganOptimasi = async (req, res) => {
 			{ where: { id: allAssignedOrderIds } }
 		);
 
-		// Create Jadwal_Pengiriman records per kendaraan
-		const createSchedulePromises = Object.values(assignmentsByKendaraanId).map(
-			(a) =>
-				Jadwal_Pengiriman.create({
-					order_ids: a.orders.map((o) => o.id),
-					id_kendaraan: a.kendaraan.id,
-					id_driver,
-					tgl_pengiriman,
-					perkiraan_sampai,
-					catatan:
-						catatan || `Pengiriman gabungan dengan ${a.orders.length} order`,
-					status: "scheduled",
-				})
+		const createdSchedules = await createSchedules(
+			assignmentsByKendaraanId,
+			id_driver,
+			tgl_pengiriman,
+			perkiraan_sampai,
+			catatan,
+			nomor_dokumen
 		);
-
-		const createdSchedules = await Promise.all(createSchedulePromises);
-
-		// Create Dokumen_Pengiriman for each schedule and update schedule record
-		await Promise.all(
-			createdSchedules.map(async (jadwal) => {
-				const nomorDok = nomor_dokumen
-					? nomor_dokumen
-					: `SJ-${jadwal.id}-${Date.now()}`;
-				const dokumen = await Dokumen_Pengiriman.create({
-					nama_dokumen: `Surat Jalan Pengiriman #${jadwal.id}`,
-					nomor_dokumen: nomorDok,
-					catatan: `Otomatis dibuat untuk jadwal pengiriman #${jadwal.id}`,
-					file_path: "-",
-				});
-				await jadwal.update({ id_dokumen_pengiriman: dokumen.id });
-			})
-		);
-
-		// Update kendaraan and driver status
 		await updateKendaraanAndDriverStatus(assignmentsByKendaraanId, id_driver);
 
-		// Return detailed result including product placements per vehicle
 		return res.status(201).json({
 			message: `Jadwal Pengiriman berhasil dibuat dengan ${
 				Object.keys(assignmentsByKendaraanId).length
 			} kendaraan.`,
-			data: createdSchedules.map((jadwal) => ({
-				id: jadwal.id,
-				id_kendaraan: jadwal.id_kendaraan,
-				id_driver: jadwal.id_driver,
-				tgl_pengiriman: jadwal.tgl_pengiriman,
-				perkiraan_sampai: jadwal.perkiraan_sampai,
-				catatan: jadwal.catatan,
-				status: jadwal.status,
-				order_ids: jadwal.order_ids,
-				
-				createdAt: jadwal.createdAt,
-				updatedAt: jadwal.updatedAt,
-			})),
+			data: createdSchedules,
 			optimization: {
 				totalKendaraanUsed: Object.keys(assignmentsByKendaraanId).length,
 				kendaraanAssignments: Object.values(assignmentsByKendaraanId).map(
@@ -253,7 +155,6 @@ const createJadwalPengirimanDenganOptimasi = async (req, res) => {
 	}
 };
 
-// Helper: validate input
 const validateInput = (
 	id_driver,
 	tgl_pengiriman,
@@ -264,7 +165,6 @@ const validateInput = (
 		!id_driver ||
 		!tgl_pengiriman ||
 		!perkiraan_sampai ||
-		!id_orders ||
 		!Array.isArray(id_orders) ||
 		id_orders.length === 0
 	) {
@@ -273,43 +173,39 @@ const validateInput = (
 	return null;
 };
 
-// Helper: calculate order requirements (weight and volume)
 const calculateOrderRequirements = (orders) => {
-	const orderRequirements = {};
-	for (const order of orders) {
-		let totalBerat = 0;
-		let totalVolume = 0;
+	return orders.reduce((acc, order) => {
+		const { totalBerat, totalVolume } = order.order_detail.reduce(
+			(totals, detail) => {
+				const { berat = 0, lebar = 0, panjang = 0, tinggi = 0 } = detail.produk;
+				const volume =
+					parseFloat(lebar) * parseFloat(panjang) * parseFloat(tinggi);
+				totals.totalBerat += detail.jumlah * parseFloat(berat);
+				totals.totalVolume += detail.jumlah * volume;
+				return totals;
+			},
+			{ totalBerat: 0, totalVolume: 0 }
+		);
 
-		for (const detail of order.order_detail) {
-			const { berat = 0, lebar = 0, panjang = 0, tinggi = 0 } = detail.produk;
-			const volume =
-				parseFloat(lebar) * parseFloat(panjang) * parseFloat(tinggi);
-			totalBerat += detail.jumlah * parseFloat(berat);
-			totalVolume += detail.jumlah * volume;
-		}
-
-		orderRequirements[order.id] = {
-			totalBerat,
-			totalVolume,
-			customer: order.customer,
-		};
-	}
-	return orderRequirements;
+		acc[order.id] = { totalBerat, totalVolume, customer: order.customer };
+		return acc;
+	}, {});
 };
 
-// Helper: calculate kendaraan costs for optimization
 const calculateKendaraanCosts = (kendaraanList) => {
-	const kendaraanCostMap = {};
-	kendaraanList.forEach((k) => {
-		if (k.kapasitas_berat <= 1200) kendaraanCostMap[k.id] = 1;
-		else if (k.kapasitas_berat <= 1500) kendaraanCostMap[k.id] = 100;
-		else if (k.kapasitas_berat <= 2500) kendaraanCostMap[k.id] = 1000;
-		else kendaraanCostMap[k.id] = 10000;
-	});
-	return kendaraanCostMap;
+	return kendaraanList.reduce((acc, k) => {
+		acc[k.id] =
+			k.kapasitas_berat <= 1200
+				? 1
+				: k.kapasitas_berat <= 1500
+				? 100
+				: k.kapasitas_berat <= 2500
+				? 1000
+				: 10000;
+		return acc;
+	}, {});
 };
 
-// Helper: setup MILP optimization model for order to vehicle assignment
 const setupOptimizationModel = (
 	orders,
 	kendaraanList,
@@ -320,17 +216,9 @@ const setupOptimizationModel = (
 	const variables = {};
 	const objective = "total_cost";
 
-	for (const order of orders) {
+	orders.forEach((order) => {
 		constraints[`order_${order.id}`] = { equal: 1 };
-	}
-
-	for (const kendaraan of kendaraanList) {
-		constraints[`weight_${kendaraan.id}`] = { max: kendaraan.kapasitas_berat };
-		constraints[`volume_${kendaraan.id}`] = { max: kendaraan.kapasitas_volume };
-	}
-
-	for (const order of orders) {
-		for (const kendaraan of kendaraanList) {
+		kendaraanList.forEach((kendaraan) => {
 			const varName = `x_${order.id}_${kendaraan.id}`;
 			const { totalBerat, totalVolume } = orderRequirements[order.id];
 			if (
@@ -344,18 +232,15 @@ const setupOptimizationModel = (
 					[`volume_${kendaraan.id}`]: totalVolume,
 				};
 			}
-		}
-	}
+		});
+	});
 
-	for (const kendaraan of kendaraanList) {
+	kendaraanList.forEach((kendaraan) => {
 		const varName = `y_${kendaraan.id}`;
 		variables[varName] = {
 			[`used_${kendaraan.id}`]: 1,
 			[objective]: kendaraanCostMap[kendaraan.id],
 		};
-	}
-
-	for (const kendaraan of kendaraanList) {
 		const assignVars = orders
 			.map((order) => `x_${order.id}_${kendaraan.id}`)
 			.filter((v) => variables[v]);
@@ -364,15 +249,13 @@ const setupOptimizationModel = (
 			assignVars.forEach((v) => {
 				variables[v][`assign_to_${kendaraan.id}`] = 1;
 			});
-			variables[`y_${kendaraan.id}`][`assign_to_${kendaraan.id}`] =
-				-assignVars.length;
+			variables[varName][`assign_to_${kendaraan.id}`] = -assignVars.length;
 		}
-	}
+	});
 
 	return { constraints, variables, objective };
 };
 
-// Helper: process MILP optimization results
 const processOptimizationResults = (
 	result,
 	orders,
@@ -409,51 +292,89 @@ const processOptimizationResults = (
 	return assignments;
 };
 
-/**
- * Creates product batches from orders.
- * Each batch represents one product type with quantity and dimensions.
- */
-const createProductBatchesFromOrders = (orders) => {
-	const batches = [];
-	orders.forEach((order) => {
-		order.order_detail.forEach((detail) => {
-			const p = detail.produk;
-			batches.push({
-				orderId: order.id,
-				productId: p.id,
-				namaProduk: p.nama,
-				qty: detail.jumlah,
-				length: parseFloat(p.panjang) || 0,
-				width: parseFloat(p.lebar) || 0,
-				height: parseFloat(p.tinggi) || 0,
-				weight: parseFloat(p.berat) || 0,
-				stackable: p.stackable === "yes",
-			});
+const createVehiclePlacements = async (assignmentsByKendaraanId) => {
+	const placements = [];
+	for (const kendaraanIdStr of Object.keys(assignmentsByKendaraanId)) {
+		const { kendaraan, orders } = assignmentsByKendaraanId[kendaraanIdStr];
+		const productBatches = createProductBatchesFromOrders(orders);
+		const placementResult = placeProductsInVehicle(kendaraan, productBatches);
+		placements.push({
+			kendaraanId: parseInt(kendaraanIdStr),
+			kendaraan: {
+				id: kendaraan.id,
+				nama: kendaraan.nama,
+				plat_nomor: kendaraan.plat_nomor,
+				kapasitas_berat: kendaraan.kapasitas_berat,
+				kapasitas_volume: kendaraan.kapasitas_volume,
+			},
+			totalBeratAssigned: placementResult.totalBeratAssigned,
+			totalVolumeAssigned: placementResult.totalVolumeAssigned,
+			productPlacements: placementResult.placements,
+			remainingWeightCapacity: placementResult.remainingWeightCapacity,
 		});
-	});
-	return batches;
+	}
+	return placements;
 };
 
-/**
- * Heuristic 3D product placement in vehicle.
- * Tries to place products one by one in a simple spatial grid layout.
- * Returns placements with positions inside vehicle.
- */
+const createSchedules = async (
+	assignmentsByKendaraanId,
+	id_driver,
+	tgl_pengiriman,
+	perkiraan_sampai,
+	catatan,
+	nomor_dokumen
+) => {
+	const createSchedulePromises = Object.values(assignmentsByKendaraanId).map(
+		async (a) => {
+			const jadwal = await Jadwal_Pengiriman.create({
+				order_ids: a.orders.map((o) => o.id),
+				id_kendaraan: a.kendaraan.id,
+				id_driver,
+				tgl_pengiriman,
+				perkiraan_sampai,
+				catatan:
+					catatan || `Pengiriman gabungan dengan ${a.orders.length} order`,
+				status: "scheduled",
+			});
+			const nomorDok = nomor_dokumen || `SJ-${jadwal.id}-${Date.now()}`;
+			const dokumen = await Dokumen_Pengiriman.create({
+				nama_dokumen: `Surat Jalan Pengiriman #${jadwal.id}`,
+				nomor_dokumen: nomorDok,
+				catatan: `Otomatis dibuat untuk jadwal pengiriman #${jadwal.id}`,
+				file_path: "-",
+			});
+			await jadwal.update({ id_dokumen_pengiriman: dokumen.id });
+			return jadwal;
+		}
+	);
+	return Promise.all(createSchedulePromises);
+};
+
+const updateKendaraanAndDriverStatus = async (
+	assignmentsByKendaraanId,
+	id_driver
+) => {
+	const assignedKendaraanIds = Object.keys(assignmentsByKendaraanId).map((id) =>
+		parseInt(id)
+	);
+	await Promise.all([
+		Kendaraan.update(
+			{ status: "inactive" },
+			{ where: { id: assignedKendaraanIds } }
+		),
+		User.update({ status: "inactive" }, { where: { id: id_driver } }),
+	]);
+};
+
 const placeProductsInVehicle = (vehicle, productBatches) => {
-	const vLength = parseFloat(vehicle.panjang);
-	const vWidth = parseFloat(vehicle.lebar);
-	const vHeight = parseFloat(vehicle.tinggi);
 	const vMaxWeight = parseFloat(vehicle.kapasitas_berat);
-
 	let remainingWeightCapacity = vMaxWeight;
-
 	const placements = [];
 	const placedBoxes = [];
 
-	// Check collision with placed boxes
-	function collides(x, y, z, length, width, height) {
-		for (const box of placedBoxes) {
-			if (
+	const collides = (x, y, z, length, width, height) => {
+		return placedBoxes.some(
+			(box) =>
 				!(
 					x + length <= box.x ||
 					box.x + box.length <= x ||
@@ -462,19 +383,14 @@ const placeProductsInVehicle = (vehicle, productBatches) => {
 					z + height <= box.z ||
 					box.z + box.height <= z
 				)
-			) {
-				return true;
-			}
-		}
-		return false;
-	}
+		);
+	};
 
-	// Find a free position for a box
-	function findPosition(length, width, height) {
+	const findPosition = (length, width, height) => {
 		const step = 0.1;
-		for (let z = 0; z + height <= vHeight; z += step) {
-			for (let y = 0; y + width <= vWidth; y += step) {
-				for (let x = 0; x + length <= vLength; x += step) {
+		for (let z = 0; z + height <= vehicle.tinggi; z += step) {
+			for (let y = 0; y + width <= vehicle.lebar; y += step) {
+				for (let x = 0; x + length <= vehicle.panjang; x += step) {
 					if (!collides(x, y, z, length, width, height)) {
 						return { x, y, z };
 					}
@@ -482,14 +398,13 @@ const placeProductsInVehicle = (vehicle, productBatches) => {
 			}
 		}
 		return null;
-	}
+	};
 
-	for (const batch of productBatches) {
-		// Check weight limit, partial packing allowed
-		let maxQtyByWeight = Math.floor(remainingWeightCapacity / batch.weight);
-		let placeQty = Math.min(batch.qty, maxQtyByWeight);
-		if (placeQty <= 0) continue;
-
+	productBatches.forEach((batch) => {
+		let placeQty = Math.min(
+			batch.qty,
+			Math.floor(remainingWeightCapacity / batch.weight)
+		);
 		for (let i = 0; i < placeQty; i++) {
 			const pos = findPosition(batch.length, batch.width, batch.height);
 			if (!pos) break;
@@ -514,16 +429,33 @@ const placeProductsInVehicle = (vehicle, productBatches) => {
 				width: batch.width,
 				height: batch.height,
 			});
-
 			remainingWeightCapacity -= batch.weight;
 		}
-	}
+	});
 
 	return { placements, remainingWeightCapacity };
 };
 
-// Helper: fallback algorithm (simplified first-fit for orders)
-async function fallbackAlgorithm(
+const createProductBatchesFromOrders = (orders) => {
+	return orders.flatMap((order) =>
+		order.order_detail.map((detail) => {
+			const p = detail.produk;
+			return {
+				orderId: order.id,
+				productId: p.id,
+				namaProduk: p.nama,
+				qty: detail.jumlah,
+				length: parseFloat(p.panjang) || 0,
+				width: parseFloat(p.lebar) || 0,
+				height: parseFloat(p.tinggi) || 0,
+				weight: parseFloat(p.berat) || 0,
+				stackable: p.stackable === "yes",
+			};
+		})
+	);
+};
+
+const fallbackAlgorithm = async (
 	orders,
 	kendaraanList,
 	id_driver,
@@ -532,7 +464,7 @@ async function fallbackAlgorithm(
 	catatan,
 	nomor_dokumen,
 	res
-) {
+) => {
 	try {
 		const sortedOrders = [...orders].sort(
 			(a, b) =>
@@ -545,7 +477,6 @@ async function fallbackAlgorithm(
 					0
 				)
 		);
-
 		const sortedKendaraan = [...kendaraanList].sort(
 			(a, b) => parseFloat(a.kapasitas_berat) - parseFloat(b.kapasitas_berat)
 		);
@@ -560,7 +491,6 @@ async function fallbackAlgorithm(
 				totalBerat: 0,
 				totalVolume: 0,
 			};
-
 			for (let i = 0; i < unassignedOrders.length; i++) {
 				const o = unassignedOrders[i];
 				const { totalBerat, totalVolume } = calculateOrderRequirements([o])[
@@ -578,17 +508,17 @@ async function fallbackAlgorithm(
 					i--;
 				}
 			}
-
-			if (assignment.orders.length > 0) {
-				assignments.push(assignment);
-			}
+			if (assignment.orders.length > 0) assignments.push(assignment);
 		}
 
 		if (unassignedOrders.length > 0) {
-			return res.status(400).json({
-				message: "Tidak semua order dapat diassign ke kendaraan yang tersedia.",
-				unassignedOrders: unassignedOrders.map((o) => o.id),
-			});
+			return res
+				.status(400)
+				.json({
+					message:
+						"Tidak semua order dapat diassign ke kendaraan yang tersedia.",
+					unassignedOrders: unassignedOrders.map((o) => o.id),
+				});
 		}
 
 		const allAssignedOrderIds = assignments.flatMap((a) =>
@@ -599,32 +529,17 @@ async function fallbackAlgorithm(
 			{ where: { id: allAssignedOrderIds } }
 		);
 
-		const createdSchedules = [];
-		for (const a of assignments) {
-			const jadwal = await Jadwal_Pengiriman.create({
-				order_ids: a.orders.map((o) => o.id),
-				id_kendaraan: a.kendaraan.id,
-				id_driver,
-				tgl_pengiriman,
-				perkiraan_sampai,
-				catatan:
-					catatan || `Pengiriman gabungan dengan ${a.orders.length} order`,
-				status: "scheduled",
-			});
-			createdSchedules.push(jadwal);
-
-			const nomorDok = nomor_dokumen
-				? nomor_dokumen
-				: `SJ-${jadwal.id}-${Date.now()}`;
-			const dokumen = await Dokumen_Pengiriman.create({
-				nama_dokumen: `Surat Jalan Pengiriman #${jadwal.id}`,
-				nomor_dokumen: nomorDok,
-				catatan: `Otomatis dibuat untuk jadwal pengiriman #${jadwal.id}`,
-				file_path: "-",
-			});
-			await jadwal.update({ id_dokumen_pengiriman: dokumen.id });
-		}
-
+		const createdSchedules = await createSchedules(
+			assignments.reduce((acc, a) => {
+				acc[a.kendaraan.id] = a;
+				return acc;
+			}, {}),
+			id_driver,
+			tgl_pengiriman,
+			perkiraan_sampai,
+			catatan,
+			nomor_dokumen
+		);
 		await updateKendaraanAndDriverStatus(
 			assignments.reduce((acc, a) => {
 				acc[a.kendaraan.id] = a;
@@ -635,18 +550,7 @@ async function fallbackAlgorithm(
 
 		return res.status(201).json({
 			message: `Jadwal Pengiriman berhasil dibuat dengan ${assignments.length} kendaraan (fallback).`,
-			data: createdSchedules.map((jadwal) => ({
-				id: jadwal.id,
-				id_kendaraan: jadwal.id_kendaraan,
-				id_driver: jadwal.id_driver,
-				tgl_pengiriman: jadwal.tgl_pengiriman,
-				perkiraan_sampai: jadwal.perkiraan_sampai,
-				catatan: jadwal.catatan,
-				status: jadwal.status,
-				order_ids: jadwal.order_ids,
-				createdAt: jadwal.createdAt,
-				updatedAt: jadwal.updatedAt,
-			})),
+			data: createdSchedules,
 			optimization: {
 				totalKendaraanUsed: assignments.length,
 				kendaraanAssignments: assignments.map((a) => ({
@@ -677,21 +581,6 @@ async function fallbackAlgorithm(
 			.status(500)
 			.json({ message: "Terjadi kesalahan pada fallback algorithm." });
 	}
-}
-
-// Helper: update kendaraan and driver status
-const updateKendaraanAndDriverStatus = async (
-	assignmentsByKendaraanId,
-	id_driver
-) => {
-	const assignedKendaraanIds = Object.keys(assignmentsByKendaraanId).map((id) =>
-		parseInt(id)
-	);
-	await Kendaraan.update(
-		{ status: "inactive" },
-		{ where: { id: assignedKendaraanIds } }
-	);
-	await User.update({ status: "inactive" }, { where: { id: id_driver } });
 };
 
 module.exports = {
